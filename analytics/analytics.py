@@ -4,6 +4,7 @@ from sqlalchemy import create_engine ,Table, Column, Integer, String, Float, Met
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.mysql import insert
 from math import sin, cos, acos, radians
 from builtins import zip
 
@@ -42,8 +43,8 @@ class Devices(Base):
 
 class AggregatedData(Base):
     __table__ = Table('aggregated_data', mysql_metadata,
-        Column('device_id', Integer),
-        Column('hour', DateTime),
+        Column('device_id', Integer, primary_key=True),
+        Column('hour', DateTime, primary_key=True),
         Column('max_temperature', Float),
         Column('data_points', Integer),
         Column('total_distance', Float)
@@ -182,17 +183,31 @@ def store_aggregated_data(mysql_session, max_temperatures, data_points_aggregate
     # Create a list of dictionaries representing the rows to be inserted
     rows = []
     for max_temp, data_points, distance in zip(max_temperatures, data_points_aggregated, total_distance):
+        device_id = max_temp[0]
+        hour = max_temp[1]
+        max_temperature = max_temp[2]
+        data_points_value = data_points[2]
+        total_distance_value = distance[2]
+
         row = {
-            'device_id': max_temp[0],
-            'hour': max_temp[1],
-            'max_temperature': max_temp[2],
-            'data_points': data_points[2],
-            'total_distance': distance[2]
+            'device_id': device_id,
+            'hour': hour,
+            'max_temperature': max_temperature,
+            'data_points': data_points_value,
+            'total_distance': total_distance_value
         }
         rows.append(row)
 
     # Insert the rows into the MySQL table
-    mysql_session.execute(aggregated_data.insert().values(rows))
+    with mysql_session.begin():
+        for row in rows:
+            insert_stmt = insert(aggregated_data).values(row)
+            on_duplicate_key_stmt = insert_stmt.on_duplicate_key_update(
+                max_temperature=insert_stmt.inserted.max_temperature,
+                data_points=insert_stmt.inserted.data_points,
+                total_distance=insert_stmt.inserted.total_distance
+            )
+            mysql_session.execute(on_duplicate_key_stmt)
 
 if __name__ == "__main__":
     asyncio.run(perform_data_etl())
